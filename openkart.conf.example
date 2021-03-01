@@ -1,0 +1,41 @@
+[general]
+# This is the "master" key used to derive all unique pairing settings. Set it
+# to something private. Anybody who knows this secret will be able to decrypt
+# traffic (including video) that they captured with a wireless sniffer. Change
+# it often if you are concerned about privacy.
+# NOTE: Changing this will un-pair every kart.
+secret =
+
+# Set this to the path of the webui. If you don't have the webui installed, you
+# can comment this out, but the webui will not work. This is not necessary for
+# the API to work.
+#docroot =
+
+# Where should the HTTP server bind?
+#http = *:8181
+
+# Should OpenKart automatically enter the "RUNNING" state on startup?
+# Set this to 'no' if you want to start it yourself via the API.
+#autostart = yes
+
+# Change the logging verbosity for debugging. Consider 'INFO' or 'DEBUG'.
+#loglevel = WARNING
+
+[wireless]
+# Set this to the name of your wireless AP network interface. If you comment
+# this out, OpenKart won't manage wireless (it will only host the TCP/IP
+# connections). This means you will have to configure your AP separately.
+interface = wlan0
+
+# Setting this will autoconfigure the IP address on the AP interface, and will
+# start udhcpd to serve leases to devices. If you unset this, you will need to
+# configure the interface and DHCP server yourself.
+network = 169.254.98.64/26
+
+# Force a specific channel (must be 1, 6, or 11). The default is to choose at
+# random.
+channel = 6
+
+# Set these if your hostapd/udhcpd binaries are not in the global search path.
+#hostapd_path =
+#udhcpd_path  =

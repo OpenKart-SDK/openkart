@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+build/
+develop-eggs
+dist/
+downloads/
+eggs/
+wheels/
+*.egg
+*.egg-info/
+
+openkart.conf
