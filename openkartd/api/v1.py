@@ -85,7 +85,7 @@ class API(web.Application):
 
     @staticmethod
     def describe_fuji(d: dict, fuji: Fuji):
-        d.setdefault('name', 'Fuji')
+        d.setdefault('kind', 'Fuji')
 
         info = d.setdefault('info', {})
         info.setdefault('serial', fuji.product_code.serial)
