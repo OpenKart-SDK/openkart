@@ -3,13 +3,80 @@
 
 import asyncio
 import binascii
-from aiohttp import web
+import json
+
+from aiohttp import web, WSMsgType
 
 from ..fuji import Fuji
+from ..pubsub import PubSub, Subscriber
 from .. import OpenKart
 
 
 routes = web.RouteTableDef()
+
+class WebSocketSubscriber(Subscriber):
+    def __init__(self, ps: PubSub, ws):
+        super().__init__(ps)
+
+        self.ws = ws
+
+    def receive(self, data):
+        asyncio.create_task(self.__receive(data))
+
+    async def __receive(self, data):
+        if isinstance(data, bytes):
+            await self.ws.send_bytes(data)
+
+        else:
+            await self.ws.send_str(json.dumps(data))
+
+@routes.get('/ws')
+async def handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        subscriber = WebSocketSubscriber(request.app.pubsub, ws)
+
+        async def cmd_subscribe(data):
+            return subscriber.subscribe(data.get('topic'))
+
+        async def cmd_unsubscribe(data):
+            return subscriber.unsubscribe(data.get('s'))
+
+        CMDS = {
+            'subscribe': cmd_subscribe,
+            'unsubscribe': cmd_unsubscribe,
+        }
+
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                except json.decoder.JSONDecodeError:
+                    break
+
+                response = {'id': data.get('id')}
+
+                cmd = data.get('cmd')
+                func = CMDS.get(cmd)
+                try:
+                    if func is None: raise Exception(f'command {cmd!r} undefined')
+                    result = await func(data)
+                except Exception as e:
+                    response['error'] = repr(e)
+                else:
+                    response['result'] = result
+
+                if 'id' in data:
+                    await ws.send_str(json.dumps(response))
+
+            elif msg.type == WSMsgType.ERROR:
+                break
+
+            else:
+                break
+
+        return ws
 
 @routes.get('/devices')
 async def handler(request):
@@ -50,13 +117,8 @@ async def handler(request):
 
 @routes.get('/state')
 async def get_state_handler(request):
-    state = request.app.openkart.state
-    d = {'state': state._name_}
-    if request.app.openkart.pairing_seed and request.app.openkart.pairing_ssid:
-        d['pairing'] = {
-            'seed': binascii.hexlify(request.app.openkart.pairing_seed).decode(),
-            'ssid': request.app.openkart.pairing_ssid,
-        }
+    d = {}
+    request.app.describe_state(d)
     return web.json_response(d)
 
 @routes.post('/state')
@@ -80,8 +142,33 @@ class API(web.Application):
         super().__init__()
 
         self.openkart = openkart
+        self.pubsub = PubSub()
+
+        self.pubsub.create_topic('devices')
+        self.pubsub.create_topic('state')
+        asyncio.create_task(self.poll_task())
 
         self.add_routes(routes)
+
+    async def poll_task(self):
+        # TODO: Remove this task; use events instead
+        while True:
+            await asyncio.sleep(0.1)
+
+            if not self.openkart._state_lock.locked():
+                with self.pubsub.topic('state') as d:
+                    self.describe_state(d)
+
+            with self.pubsub.topic('devices') as d:
+                devices = d.setdefault('devices', [])
+
+                num_devs = len(self.openkart.devices)
+                del devices[num_devs:]
+                for i,x in enumerate(self.openkart.devices):
+                    if i == len(devices):
+                        devices.append({})
+
+                    self.describe_device(devices[i], x)
 
     @staticmethod
     def describe_fuji(d: dict, fuji: Fuji):
@@ -101,13 +188,25 @@ class API(web.Application):
         status = d.setdefault('status', {})
         status['battery'] = fuji.battery_state
         status['cable_connected'] = fuji.cable_connected
-        status['signal'] = fuji.signal
+        if status.get('signal') != fuji.signal:
+            status['signal'] = fuji.signal
 
     @classmethod
     def describe_device(cls, d: dict, device):
         if isinstance(device, Fuji):
             cls.describe_fuji(d, device)
             return True
+
+    def describe_state(self, d: dict):
+        d['state'] = self.openkart.state._name_
+        if self.openkart.pairing_seed and self.openkart.pairing_ssid:
+            pairing = d.setdefault('pairing', {})
+            if self.openkart.pairing_ssid != pairing.get('ssid'):
+                pairing['seed'] = binascii.hexlify(self.openkart.pairing_seed).decode()
+                pairing['ssid'] = self.openkart.pairing_ssid
+
+        elif 'pairing' in d:
+            del d['pairing']
 
     def find_device(self, serial: str):
         for device in self.openkart.devices:
