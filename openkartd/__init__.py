@@ -100,6 +100,7 @@ class OpenKart:
         self.open_server = None
 
         self.state = self.State.DOWN
+        self._state_lock = asyncio.Lock()
 
         self.group_info = group_info
         self.rcd_info = rcd_info
@@ -159,6 +160,7 @@ class OpenKart:
             client.close()
 
     async def set_state(self, state: State):
+      async with self._state_lock:
         if state == self.state: return
 
         if not self.group_info and state == self.State.PAIRING:
