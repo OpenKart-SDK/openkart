@@ -368,5 +368,18 @@ class Subscriber:
         t._subscribers.remove((self, s))
         self.receive({'s': s, 'msg': 'close'})
 
+    def unsubscribe_all(self, *, silent=False):
+        for s, t in enumerate(self._s):
+            if t is None: continue
+
+            self._topics.remove(t)
+            t._subscribers.remove((self, s))
+
+            if not silent:
+                self.receive({'s': s, 'msg': 'close'})
+
+        del self._s[:]
+        assert not self._topics
+
     def receive(self, data):
         raise NotImplementedError

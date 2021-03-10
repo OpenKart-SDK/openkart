@@ -48,33 +48,37 @@ async def handler(request):
             'unsubscribe': cmd_unsubscribe,
         }
 
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                try:
-                    data = json.loads(msg.data)
-                except json.decoder.JSONDecodeError:
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                    except json.decoder.JSONDecodeError:
+                        break
+
+                    response = {'id': data.get('id')}
+
+                    cmd = data.get('cmd')
+                    func = CMDS.get(cmd)
+                    try:
+                        if func is None: raise Exception(f'command {cmd!r} undefined')
+                        result = await func(data)
+                    except Exception as e:
+                        response['error'] = repr(e)
+                    else:
+                        response['result'] = result
+
+                    if 'id' in data:
+                        await ws.send_str(json.dumps(response))
+
+                elif msg.type == WSMsgType.ERROR:
                     break
 
-                response = {'id': data.get('id')}
-
-                cmd = data.get('cmd')
-                func = CMDS.get(cmd)
-                try:
-                    if func is None: raise Exception(f'command {cmd!r} undefined')
-                    result = await func(data)
-                except Exception as e:
-                    response['error'] = repr(e)
                 else:
-                    response['result'] = result
+                    break
 
-                if 'id' in data:
-                    await ws.send_str(json.dumps(response))
-
-            elif msg.type == WSMsgType.ERROR:
-                break
-
-            else:
-                break
+        finally:
+            subscriber.unsubscribe_all(silent=True)
 
         return ws
 
