@@ -4,12 +4,15 @@
 import asyncio
 import binascii
 import json
+import logging
 
 from aiohttp import web, WSMsgType
 
 from ..fuji import Fuji
 from ..pubsub import PubSub, Subscriber
 from .. import OpenKart
+
+l = logging.getLogger(__name__)
 
 
 routes = web.RouteTableDef()
@@ -54,6 +57,7 @@ async def handler(request):
                     try:
                         data = json.loads(msg.data)
                     except json.decoder.JSONDecodeError:
+                        l.warning('Disconnecting WS client due to invalid JSON')
                         break
 
                     response = {'id': data.get('id')}
@@ -65,6 +69,8 @@ async def handler(request):
                         result = await func(data)
                     except Exception as e:
                         response['error'] = repr(e)
+                        l.warning('WS command %r resulted in error %r',
+                                  data, e)
                     else:
                         response['result'] = result
 
@@ -72,9 +78,13 @@ async def handler(request):
                         await ws.send_str(json.dumps(response))
 
                 elif msg.type == WSMsgType.ERROR:
+                    l.warning('Disconnecting WS client due to '
+                              'error %r', msg)
                     break
 
                 else:
+                    l.warning('Disconnecting WS client due to '
+                              'unrecognized message type %r', msg.type)
                     break
 
         finally:
