@@ -13,7 +13,7 @@ Getting Started
 First, you will need a Linux system with wireless capability. Either install
 Linux directly on a WLAN-equipped computer, or install it in a VM and
 pass-through your wireless NIC (via USB pass-through for USB devices, or PCI
-pass-through for builtin/PCI devices).
+pass-through for built-in/PCI devices).
 
 Check that the device (and its drivers) support operating in AP-mode:
 ```
@@ -31,9 +31,8 @@ If "AP" is listed, this device should work.
 
 ### Approach #2: Direct installation
 
-You will need to install Busybox's "udhcpd" and a
-[patched](https://github.com/OpenKart-SDK/hostapd) copy of hostapd. Get those
-set up first.
+You will need to install BusyBox's "udhcpd" and a
+[patched](https://github.com/OpenKart-SDK/hostapd) copy of hostapd. Get that set up first.
 
 Install the OpenKart server with:
 `./setup.py install`
