@@ -4,7 +4,7 @@ OpenKart SDK
 This is a framework for interoperating with the 802.11 wireless ("WiFi") RC toy
 karts manufactured and distributed by a certain well-known Japanese video game
 corporation. This allows using a (Linux) computer's wireless interface to serve
-as a host and pair the karts directly, so that you can interact with them
+as a host and pair the karts directly, so that you can interoperate with them
 in your own project.
 
 Getting Started
@@ -32,15 +32,14 @@ If "AP" is listed, this device should work.
 ### Approach #2: Direct installation
 
 You will need to install BusyBox's "udhcpd" and a
-[patched](https://github.com/OpenKart-SDK/hostapd) copy of hostapd. Get those
-Set up first.
+[patched](https://github.com/OpenKart-SDK/hostapd) copy of hostapd. Get that set up first.
 
 Install the OpenKart server with:
 `./setup.py install`
 
 Customize the configuration (see `openkart.conf.example`).
 
-Run OpenKart with `openkartd /path/to/your/openkart.conf.`
+Run OpenKart with `openkartd /path/to/your/openkart.conf`
 
 API reference
 -------------
@@ -55,7 +54,7 @@ string. The state may be one of:
 - **DOWN**: OpenKart is in a "standby" mode.
 - **PAIRING**: OpenKart is waiting for a device to attempt pairing.
 
-In **PAIRING** mode, there may be a "pairing" object, which includes the "seed."
+In **PAIRING** mode, there may be a "pairing" object, which includes the "seed"
 and "ssid" to include in the QR code to display to the kart.
 
 **POST /v1/state**: Request a state change by POSTing a JSON object like
