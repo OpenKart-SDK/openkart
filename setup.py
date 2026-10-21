@@ -26,6 +26,11 @@ setup(name='OpenKart',
           'aiohttp',
       ],
 
+      extras_require = {
+          # Video streaming (decoding the kart's H.264 and serving JPEGs)
+          'video': ['av', 'Pillow'],
+      },
+
       entry_points={
           'console_scripts': [
               'openkartd = openkartd.__main__:main',

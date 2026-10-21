@@ -210,7 +210,9 @@ class Config:
         self.http = host, port
         self.docroot = docroot
 
-        logging.basicConfig(level=self.loglevel)
+        logging.basicConfig(level=self.loglevel,
+                            format='%(asctime)s %(levelname)s:%(name)s:%(message)s')
+        logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
     async def make_openkart(self):
         kwargs = {}
