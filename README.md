@@ -37,6 +37,9 @@ You will need to install BusyBox's "udhcpd" and a
 Install the OpenKart server with:
 `./setup.py install`
 
+For video streaming, also install the optional dependencies (PyAV and
+Pillow): `pip install '.[video]'`.
+
 Customize the configuration (see `openkart.conf.example`).
 
 Run OpenKart with `openkartd /path/to/your/openkart.conf`
@@ -66,3 +69,42 @@ server.
 **GET /v1/devices/{SERIAL}**: Return a specific device by its serial number.
 
 **POST /v1/devices/{SERIAL}/shutdown**: Instruct the device to power off.
+
+**POST /v1/devices/{SERIAL}/drive**: Drive the kart with a JSON object like
+`{"throttle": 0.5, "steering": -0.2, "brake": false}` (throttle and steering
+in [-1, 1]). The first command puts the kart in drive mode; commands should be
+repeated (e.g. at 30 Hz), because the kart is stopped with the brake light on
+if no command arrives for 0.5 seconds. The same command is available on the
+WebSocket interface as `{"cmd": "drive", "serial": ..., ...}`.
+
+**GET /v1/devices/{SERIAL}/video.mjpeg**: The kart's camera as an MJPEG
+stream (`multipart/x-mixed-replace`), usable directly in an `<img>` tag.
+Requires the `video` extra. The kart only sends a keyframe when it starts
+streaming after power-on, so power the kart on while openkartd is running;
+`video.needs_keyframe` in the device description tells you when it is needed.
+
+Device descriptions also include `status.battery_percent` (approximate: the
+kart only reports 0-4 battery bars), `status.driving` and `status.video`.
+
+Pairing
+-------
+
+`tools/pair_qr.py` switches the server to `PAIRING`, displays the QR code and
+waits for the kart. A kart that was paired with another console must be put
+into pairing mode first: press the ignition button, wait until the red brake
+light turns off while the blue light keeps blinking, then press it again.
+
+Example UI
+----------
+
+`examples/drive-ui/` is a single-page UI showing the video, battery and
+signal, with keyboard and gamepad driving. Point `docroot` at that directory
+and open `http://localhost:8181/`.
+
+Protocol notes and debugging
+----------------------------
+
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for what was learned about pairing,
+the "LSP" connection and the video stream format, and for the
+`OPENKART_HOSTAPD_LOG` / `OPENKART_CAPTURE_DIR` debugging aids
+(`tools/kart_watch.py` shows which network the kart is probing for).

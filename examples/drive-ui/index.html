@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kart Drive</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; --card: #ffffff;
+    --line: #dddcd6; --accent: #d33c2c; --ok: #2f8a4a; --warn: #b7791f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ededea; --muted: #9a9a93; --card: #20201e;
+            --line: #34342f; --accent: #ef5a48; --ok: #4cbf6c; --warn: #e0a640; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line);
+          border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .row { display: flex; justify-content: space-between; gap: 12px;
+         flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+         background: var(--muted); margin-right: 6px; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); }
+  .dot.bad { background: var(--accent); }
+  .bar { position: relative; height: 14px; background: var(--bg);
+         border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .bar i { position: absolute; top: 0; bottom: 0; background: var(--accent); }
+  .bar::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0;
+                width: 1px; background: var(--line); }
+  label { display: block; margin: 10px 0 4px; }
+  input[type=range] { width: 100%; }
+  select, button { font: inherit; padding: 6px 10px; border-radius: 6px;
+                   border: 1px solid var(--line); background: var(--card);
+                   color: var(--fg); }
+  button.arm { background: var(--accent); color: #fff; border-color: transparent; }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 4px; padding: 0 5px; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; }
+  .video { position: relative; aspect-ratio: 16 / 10; background: #000;
+           border-radius: 8px; overflow: hidden; }
+  .video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .video img:not([src]) { visibility: hidden; }
+  .video .msg { position: absolute; inset: 0; display: flex;
+                align-items: center; justify-content: center; color: #bbb; }
+  .battery { display: inline-flex; align-items: center; gap: 6px; }
+  .cells { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line);
+           border-radius: 3px; }
+  .cells i { width: 6px; height: 10px; background: var(--line); border-radius: 1px; }
+  .cells i.on { background: var(--ok); }
+  .cells.low i.on { background: var(--accent); }
+  td { padding: 3px 0; vertical-align: top; }
+  td:first-child { width: 45%; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kart Drive</h1>
+
+  <div class="card">
+    <div class="row">
+      <div><span id="wsdot" class="dot"></span><span id="wsstate">Connecting…</span></div>
+      <div><select id="kart"><option value="">No kart</option></select></div>
+    </div>
+    <div class="row muted" style="margin-top:8px">
+      <span class="battery">Battery: <span id="cells" class="cells"><i></i><i></i><i></i><i></i></span>
+        <span id="battery">–</span></span>
+      <span id="signal">Signal: –</span>
+      <span id="driving">Driving: –</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="video"><img id="video" alt="Video from the kart camera">
+      <div id="videomsg" class="msg">No kart connected</div></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <strong>Controls</strong>
+      <button id="arm" class="arm">Enable driving</button>
+    </div>
+    <label>Throttle <span id="tv" class="muted">0</span></label>
+    <div class="bar"><i id="tb"></i></div>
+    <label>Steering <span id="sv" class="muted">0</span></label>
+    <div class="bar"><i id="sb"></i></div>
+    <label>Max speed <span id="maxv" class="muted"></span></label>
+    <input id="max" type="range" min="10" max="100" step="5" value="40">
+    <p class="muted" id="input" style="margin:10px 0 0">Input: keyboard</p>
+  </div>
+
+  <div class="card muted">
+    <table>
+      <tr><td><kbd>W</kbd> <kbd>S</kbd> / <kbd>↑</kbd> <kbd>↓</kbd></td><td>forward / reverse</td></tr>
+      <tr><td><kbd>A</kbd> <kbd>D</kbd> / <kbd>←</kbd> <kbd>→</kbd></td><td>steer</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>brake (brake light)</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>disable driving</td></tr>
+      <tr><td>Gamepad</td><td>RT forward, LT reverse, left stick steer, A brake</td></tr>
+    </table>
+    <p style="margin:10px 0 0">If the page loses focus or the connection drops,
+    the server stops the kart within half a second.</p>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const RATE_MS = 1000 / 30;
+const keys = new Set();
+let ws = null, armed = false, throttle = 0, steering = 0, brake = false;
+let devices = [];
+
+function connect() {
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/ws`);
+  ws.onopen = () => { $('wsdot').className = 'dot ok'; $('wsstate').textContent = 'Server connected'; };
+  ws.onclose = () => {
+    $('wsdot').className = 'dot bad'; $('wsstate').textContent = 'Server unreachable';
+    setTimeout(connect, 1000);
+  };
+}
+
+async function pollDevices() {
+  try {
+    const r = await fetch('/v1/devices');
+    devices = (await r.json()).devices;
+  } catch { devices = []; }
+  const sel = $('kart'), cur = sel.value;
+  const serials = devices.map(d => d.info.serial);
+  if (serials.join() !== [...sel.options].map(o => o.value).filter(Boolean).join()) {
+    sel.innerHTML = serials.length ? '' : '<option value="">No kart</option>';
+    for (const s of serials) sel.add(new Option(s, s));
+    if (serials.includes(cur)) sel.value = cur;
+  }
+  const d = devices.find(d => d.info.serial === sel.value);
+  if (armed && !d) setArmed(false);
+  const bars = d ? d.status.battery : 0;
+  [...$('cells').children].forEach((c, i) => c.className = i < bars ? 'on' : '');
+  $('cells').className = bars <= 1 ? 'cells low' : 'cells';
+  $('battery').textContent = d
+    ? `≈${d.status.battery_percent}% (${bars}/4 bars)${d.status.cable_connected ? ', cable connected' : ''}`
+    : '–';
+  setVideo(d ? d.info.serial : '', d && d.status.video, d && d.video && d.video.needs_keyframe);
+  $('signal').textContent = `Signal: ${d && d.status.signal != null ? d.status.signal + ' dBm' : '–'}`;
+  $('driving').textContent = `Driving: ${d ? (d.status.driving ? 'active' : 'stopped') : '–'}`;
+}
+
+let videoSerial = '';
+function setVideo(serial, live, needsKeyframe) {
+  if (serial !== videoSerial) {
+    videoSerial = serial;
+    $('video').src = serial ? `/v1/devices/${encodeURIComponent(serial)}/video.mjpeg` : '';
+    if (!serial) $('video').removeAttribute('src');
+  }
+  $('videomsg').textContent = !serial ? 'No kart connected'
+    : needsKeyframe ? 'No video: power-cycle the kart while the server is running'
+    : 'Starting video…';
+  $('videomsg').style.display = serial && live ? 'none' : 'flex';
+}
+$('video').onerror = () => { videoSerial = ''; };  // retry on next poll
+
+function setArmed(on) {
+  armed = on && !!$('kart').value;
+  $('arm').textContent = armed ? 'Disable driving' : 'Enable driving';
+  $('arm').className = armed ? '' : 'arm';
+  if (!armed) { throttle = 0; steering = 0; }
+}
+
+function readInput(dt) {
+  const max = $('max').value / 100;
+  const pad = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(Boolean);
+  let t = 0, s = 0, b = keys.has('Space');
+
+  if (pad) {
+    const rt = pad.buttons[7]?.value || 0, lt = pad.buttons[6]?.value || 0;
+    const sx = pad.axes[0] || 0;
+    t = rt - lt;
+    s = Math.abs(sx) < 0.12 ? 0 : sx;
+    b = b || !!pad.buttons[0]?.pressed;
+    $('input').textContent = `Input: gamepad (${pad.id.slice(0, 40)}) + keyboard`;
+  }
+  if (keys.has('KeyW') || keys.has('ArrowUp')) t = 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) t = -1;
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) s = -1;
+  if (keys.has('KeyD') || keys.has('ArrowRight')) s = 1;
+
+  // Throttle ramps so key presses don't jolt the kart; steering stays direct.
+  const target = t * max, step = 2.5 * dt;
+  throttle += Math.max(-step, Math.min(step, target - throttle));
+  if (target === 0 && Math.abs(throttle) < step) throttle = 0;
+  steering = s;
+  brake = b;
+}
+
+function render() {
+  const bar = (el, v) => {
+    el.style.left = v >= 0 ? '50%' : `${50 + v * 50}%`;
+    el.style.width = `${Math.abs(v) * 50}%`;
+  };
+  bar($('tb'), throttle); bar($('sb'), steering);
+  $('tv').textContent = throttle.toFixed(2);
+  $('sv').textContent = steering.toFixed(2);
+  $('maxv').textContent = `${$('max').value}%`;
+}
+
+let last = performance.now();
+setInterval(() => {
+  const now = performance.now(), dt = (now - last) / 1000; last = now;
+  if (armed) readInput(dt);
+  render();
+  if (armed && $('kart').value && document.hasFocus() && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ cmd: 'drive', serial: $('kart').value,
+      throttle: +throttle.toFixed(3), steering: +steering.toFixed(3), brake }));
+  }
+}, RATE_MS);
+
+const DRIVE_KEYS = ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'];
+addEventListener('keydown', e => {
+  if (e.code === 'Escape') { setArmed(false); return; }
+  if (DRIVE_KEYS.includes(e.code)) { keys.add(e.code); e.preventDefault(); }
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+$('arm').onclick = () => { setArmed(!armed); $('arm').blur(); };
+$('kart').onchange = () => setArmed(false);
+
+connect();
+pollDevices();
+setInterval(pollDevices, 1000);
+</script>
+</body>
+</html>
