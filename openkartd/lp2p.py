@@ -159,15 +159,30 @@ class LP2PAP:
         config_path = self.tempdir / 'hostapd.conf'
         config_path.write_text(config)
 
+        # OPENKART_HOSTAPD_LOG=/path runs hostapd with -dd and appends all of
+        # its output there, for debugging association problems.
+        log_path = os.environ.get('OPENKART_HOSTAPD_LOG')
+        debug = ['-dd', '-t'] if log_path else []
+
         self.hostapd = await asyncio.create_subprocess_exec(
-            self.hostapd_path, str(config_path.resolve()),
+            self.hostapd_path, *debug, str(config_path.resolve()),
             stdout=subprocess.PIPE,
         )
 
+        log = open(log_path, 'ab', buffering=0) if log_path else None
         while True:
             line = await self.hostapd.stdout.readline()
+            if log: log.write(line)
+            if not line:
+                raise RuntimeError('hostapd exited before AP-ENABLED')
             if b'AP-ENABLED' in line:
                 break
+
+        # Keep draining stdout so hostapd never blocks on a full pipe.
+        async def drain(stdout):
+            while line := await stdout.readline():
+                if log: log.write(line)
+        asyncio.create_task(drain(self.hostapd.stdout))
 
         loop = asyncio.get_running_loop()
         _, self.ctrl = await loop.create_datagram_endpoint(
