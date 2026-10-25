@@ -3,7 +3,6 @@
 
 import asyncio
 import logging
-import binascii
 import hashlib
 import os
 from enum import Enum
@@ -52,6 +51,7 @@ class OpenKart:
     devices: list
     pairing_seed: bytes
     pairing_ssid: str
+    pairing_channel: int
     state: Enum
 
     DEVTYPE_REGISTRY = {
@@ -109,6 +109,7 @@ class OpenKart:
 
         self.pairing_seed = None
         self.pairing_ssid = None
+        self.pairing_channel = None
 
     def device_connected(self, device: RcdDevice):
         devtype = self.DEVTYPE_REGISTRY.get(device.name)
@@ -179,6 +180,7 @@ class OpenKart:
 
         self.pairing_ssid = None
         self.pairing_seed = None
+        self.pairing_channel = None
 
         self.state = self.State.DOWN
         l.info('Now operating in state: %s', self.state)
@@ -200,15 +202,21 @@ class OpenKart:
 
         elif state == self.State.PAIRING:
             if self.ap:
-                rand = os.urandom(0x1C)
+                rand = os.urandom(0x1B)
                 self.pairing_seed = rand[:0x10]
-                ssid_b64 = binascii.b2a_base64(rand[0x10:]).decode().strip()
-                self.pairing_ssid = f'openkart-pair_{ssid_b64}'
+                # The kart expects a 23-character pairing SSID (like the
+                # Switch's, which starts with 'P'); see Pairing-QR-Code-Generator.
+                self.pairing_ssid = 'P' + rand[0x10:].hex()
 
+                # Pair on the same channel as the main network, so the QR
+                # never has to carry channel 11 (Pairing-QR-Code-Generator
+                # only encodes 1 and 6 correctly).
                 pairing_info = GroupInfo(
                     ssid=self.pairing_ssid,
                     psk=hashlib.sha256(self.pairing_seed).digest(),
+                    channel=self.group_info.channel,
                 )
+                self.pairing_channel = pairing_info.channel
 
                 await self.ap.start(pairing_info, temporary=True)
 

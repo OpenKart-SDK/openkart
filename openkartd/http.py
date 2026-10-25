@@ -14,6 +14,10 @@ class OpenKartApplication(web.Application):
         self.add_subapp('/v1', v1(openkart))
 
         if docroot:
+            async def index(request):
+                raise web.HTTPFound('/index.html')
+
+            self.router.add_get('/', index)
             self.router.add_static('/', docroot)
 
 if __name__ == '__main__':

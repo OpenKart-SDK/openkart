@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import asyncio
+import os
 import struct
 import time
 import logging
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from .util import pad_to, retry_connect
 from .rcd import RcdClient, RcdDevice, RcdError
 from .lp2p import GroupInfo
+from .video import FujiVideo
 
 l = logging.getLogger(__name__)
 
@@ -125,6 +127,133 @@ class FujiPairingClient(RcdClient):
         await self.invoke(self.SERVICE_ID, 1, request)
 
 
+class FujiDrive:
+    """Streams teleoperation packets to a kart's drive port.
+
+    The kart only zeroes its throttle after 1s without packets, so as long as
+    this keeps sending, it is our job to stop the kart if the controller goes
+    quiet: after DEADMAN seconds without set(), throttle drops to 0 and the
+    brake light comes on.
+    """
+
+    RATE = 30
+    DEADMAN = 0.5
+
+    class proto(asyncio.DatagramProtocol):
+        def connection_made(self, transport):
+            self.transport = transport
+
+    def __init__(self, address: str):
+        self.address = address
+        self.transport = None
+        self.task = None
+
+        self.throttle = 0
+        self.steering = 0
+        self.brake = False
+        self.counter = 0
+        self.last_set = 0.0
+
+    @staticmethod
+    def to_int8(value: float) -> int:
+        return max(-128, min(127, round(value * 127)))
+
+    def set(self, throttle: float, steering: float, brake: bool = False):
+        self.throttle = self.to_int8(throttle)
+        self.steering = self.to_int8(steering)
+        self.brake = bool(brake)
+        self.last_set = time.monotonic()
+
+    def packet(self) -> bytes:
+        throttle, steering, brake = self.throttle, self.steering, self.brake
+        if time.monotonic() - self.last_set > self.DEADMAN:
+            throttle, steering, brake = 0, 0, True
+
+        self.counter = (self.counter + 1) & 0xFFFFFFFF
+        return pad_to(struct.pack('<bbBxI', throttle, steering, brake,
+                                  self.counter), 0x20)
+
+    async def start(self, control: FujiControlClient):
+        await control.set_state(1)
+
+        loop = asyncio.get_running_loop()
+        self.transport, _ = await loop.create_datagram_endpoint(
+            self.proto, remote_addr=(self.address, DRIVE_PORT))
+
+        self.task = asyncio.create_task(self.__send_loop())
+        l.info('Drive mode enabled for %s', self.address)
+
+    async def __send_loop(self):
+        interval = 1 / self.RATE
+        while True:
+            self.transport.sendto(self.packet())
+            await asyncio.sleep(interval)
+
+    @property
+    def active(self) -> bool:
+        return time.monotonic() - self.last_set <= self.DEADMAN
+
+    def close(self):
+        if self.task:
+            self.task.cancel()
+            self.task = None
+
+        if self.transport:
+            self.transport.close()
+            self.transport = None
+
+
+class FujiLSP(asyncio.Protocol):
+    """The kart's "LSP" video control connection. Its protocol is unknown;
+    we keep it open and log whatever arrives."""
+
+    def __init__(self, fuji):
+        self.fuji = fuji
+
+    def log(self, line: str):
+        l.debug('LSP %s: %s', self.fuji.address, line)
+        if self.fuji.capture:
+            self.fuji.capture.log('lsp', line)
+
+    def connection_made(self, transport):
+        self.log('connected')
+
+    def data_received(self, data):
+        self.log('<- ' + data.hex())
+
+    def connection_lost(self, exc):
+        self.log(f'closed ({exc!r})')
+
+
+class FujiCapture:
+    """Records the kart's undocumented traffic (status telemetry, "LSP" video
+    control and video stream) under $OPENKART_CAPTURE_DIR for analysis."""
+
+    MAX_VIDEO_BYTES = 32 << 20
+
+    def __init__(self, directory: str):
+        self.dir = directory
+        os.makedirs(directory, exist_ok=True)
+        self.video = open(os.path.join(directory, 'video.bin'), 'ab')
+        self.video_bytes = 0
+        self.last_status = None
+
+    def log(self, name: str, line: str):
+        with open(os.path.join(self.dir, name + '.log'), 'a') as f:
+            f.write(f'{time.time():.3f} {line}\n')
+
+    def status(self, data: bytes):
+        if data != self.last_status:
+            self.last_status = data
+            self.log('status', data.hex())
+
+    def video_packet(self, data: bytes):
+        if self.video_bytes < self.MAX_VIDEO_BYTES:
+            self.video.write(struct.pack('<dI', time.time(), len(data)) + data)
+            self.video.flush()
+            self.video_bytes += len(data)
+
+
 class Fuji:
     """Client class for representing a 'Fuji' (Mario Kart Live kart) device."""
 
@@ -186,11 +315,21 @@ class Fuji:
         self.signal = None
 
         self.telemetry_socket = None
+        self.video_socket = None
+        self.video = None
+        self.drive = None
+        self.capture = None
+        self.__lsp_task = None
 
         self.__telemetry_event = asyncio.Event()
         self.__poll_ap_task = None
+        self.__drive_lock = asyncio.Lock()
 
     def close(self):
+        if self.drive:
+            self.drive.close()
+            self.drive = None
+
         self.device.close()
         self.event.close()
         self.control.close()
@@ -198,6 +337,17 @@ class Fuji:
         if self.telemetry_socket:
             self.telemetry_socket.unregister(self.device.address)
             self.telemetry_socket = None
+
+        if self.video_socket:
+            self.video_socket.unregister(self.device.address)
+            self.video_socket = None
+
+        if self.video:
+            self.video.close()
+            self.video = None
+
+        if self.__lsp_task:
+            self.__lsp_task.cancel()
 
         if self.__poll_ap_task:
             self.__poll_ap_task.cancel()
@@ -211,6 +361,21 @@ class Fuji:
         self.video_control_rendezvous = ports.tcp1
 
         self.telemetry_socket.register(self.device.address, self.handle_telemetry)
+
+        capture_dir = os.environ.get('OPENKART_CAPTURE_DIR')
+        if capture_dir:
+            self.capture = FujiCapture(capture_dir)
+
+        try:
+            self.video = FujiVideo()
+        except ImportError:
+            l.warning('PyAV not installed: video disabled')
+        self.video_socket.register(self.device.address, self.handle_video)
+
+        # The kart opens the "LSP" control connection when it starts
+        # streaming; it must be accepted or the kart drops off the network.
+        self.__lsp_task = asyncio.create_task(self.__accept_lsp())
+
         await self.control.set_connection_info(
             telemetry_port=self.telemetry_socket.port,
             video_control_port=self.video_control_rendezvous.port,
@@ -222,6 +387,26 @@ class Fuji:
         if ap:
             self.__poll_ap_task = asyncio.create_task(self.__poll_ap(ap))
 
+    async def __accept_lsp(self):
+        while True:
+            await self.video_control_rendezvous.expect(
+                lambda: FujiLSP(self), self.device.address)
+
+    def handle_video(self, data: bytes):
+        if self.capture:
+            self.capture.video_packet(data)
+        if self.video:
+            self.video.handle_packet(data)
+
+    async def wake(self):
+        """Enable drive mode (and with it the video stream) without moving:
+        until set_drive() is called the kart gets stop+brake packets."""
+        async with self.__drive_lock:
+            if self.drive is None:
+                drive = FujiDrive(self.address)
+                await drive.start(self.control)
+                self.drive = drive
+
     async def __poll_ap(self, ap):
         while True:
             await asyncio.sleep(0.1)
@@ -231,6 +416,12 @@ class Fuji:
                 self.signal = int(signal)
             except (TypeError, ValueError):
                 pass
+
+    async def set_drive(self, throttle: float, steering: float,
+                        brake: bool = False):
+        """Set throttle/steering in [-1, 1]; enables drive mode on first use."""
+        await self.wake()
+        self.drive.set(throttle, steering, brake)
 
     async def shutdown(self):
         await self.control.shutdown()
@@ -243,6 +434,8 @@ class Fuji:
             return
 
         telemetry_type, telemetry_data = data[0], data[1:]
+        if self.capture and telemetry_type != 1:
+            self.capture.log(f'telemetry{telemetry_type}', telemetry_data.hex())
 
         if telemetry_type == 1:
             self.handle_status(telemetry_data)
@@ -265,8 +458,17 @@ class Fuji:
 
         self.cable_connected = bool(data[0]&1)
         self.battery_state = data[3]
+        if self.capture:
+            self.capture.status(data)
 
         self.__telemetry_event.set()
+
+    BATTERY_BARS = 4
+
+    @property
+    def battery_percent(self) -> int:
+        """Approximate: the kart only reports HUD bars (0-4)."""
+        return min(self.battery_state, self.BATTERY_BARS) * 100 // self.BATTERY_BARS
 
     def handle_imu(self, data: bytes):
         pass # TODO

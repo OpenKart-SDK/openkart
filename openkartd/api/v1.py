@@ -17,6 +17,21 @@ l = logging.getLogger(__name__)
 
 routes = web.RouteTableDef()
 
+
+async def drive_device(device, data: dict):
+    """Apply a {"throttle", "steering", "brake"} command, values in [-1, 1]."""
+    if not isinstance(device, Fuji):
+        raise ValueError('device cannot be driven')
+
+    def axis(name):
+        value = float(data.get(name, 0))
+        if not -1 <= value <= 1:
+            raise ValueError(f'{name} out of range [-1, 1]')
+        return value
+
+    await device.set_drive(axis('throttle'), axis('steering'),
+                           bool(data.get('brake', False)))
+
 class WebSocketSubscriber(Subscriber):
     def __init__(self, ps: PubSub, ws):
         super().__init__(ps)
@@ -46,9 +61,17 @@ async def handler(request):
         async def cmd_unsubscribe(data):
             return subscriber.unsubscribe(data.get('s'))
 
+        async def cmd_drive(data):
+            device = request.app.find_device(data.get('serial'))
+            if not device:
+                raise KeyError('no such device')
+            await drive_device(device, data)
+            return True
+
         CMDS = {
             'subscribe': cmd_subscribe,
             'unsubscribe': cmd_unsubscribe,
+            'drive': cmd_drive,
         }
 
         try:
@@ -129,6 +152,58 @@ async def handler(request):
     return web.json_response(True)
 
 
+@routes.get('/devices/{serial}/video.mjpeg')
+async def handler(request):
+    device = request.app.find_device(request.match_info['serial'])
+    if not isinstance(device, Fuji):
+        raise web.HTTPNotFound()
+    if device.video is None:
+        raise web.HTTPServiceUnavailable(text='video support not available')
+
+    await device.wake()
+
+    boundary = 'frame'
+    response = web.StreamResponse(headers={
+        'Content-Type': f'multipart/x-mixed-replace; boundary={boundary}',
+        'Cache-Control': 'no-cache',
+    })
+    await response.prepare(request)
+
+    video = device.video
+    video.viewers += 1
+    try:
+        last = 0
+        while device.video is video:
+            result = await video.next_jpeg(last)
+            if result is None or result[1] is None:
+                continue
+            last, jpeg = result
+            await response.write(
+                f'--{boundary}\r\nContent-Type: image/jpeg\r\n'
+                f'Content-Length: {len(jpeg)}\r\n\r\n'.encode() + jpeg + b'\r\n')
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    finally:
+        video.viewers -= 1
+
+    return response
+
+
+@routes.post('/devices/{serial}/drive')
+async def handler(request):
+    serial = request.match_info['serial']
+    device = request.app.find_device(serial)
+    if not device:
+        raise web.HTTPNotFound()
+
+    try:
+        await drive_device(device, await request.json())
+    except ValueError as e:
+        raise web.HTTPNotAcceptable(text=str(e))
+
+    return web.json_response(True)
+
+
 @routes.get('/state')
 async def get_state_handler(request):
     d = {}
@@ -201,7 +276,12 @@ class API(web.Application):
 
         status = d.setdefault('status', {})
         status['battery'] = fuji.battery_state
+        status['battery_percent'] = fuji.battery_percent
         status['cable_connected'] = fuji.cable_connected
+        status['driving'] = bool(fuji.drive and fuji.drive.active)
+        status['video'] = bool(fuji.video and fuji.video.streaming)
+        if fuji.video:
+            d['video'] = fuji.video.stats()
         if status.get('signal') != fuji.signal:
             status['signal'] = fuji.signal
 
@@ -218,6 +298,7 @@ class API(web.Application):
             if self.openkart.pairing_ssid != pairing.get('ssid'):
                 pairing['seed'] = binascii.hexlify(self.openkart.pairing_seed).decode()
                 pairing['ssid'] = self.openkart.pairing_ssid
+                pairing['channel'] = self.openkart.pairing_channel
 
         elif 'pairing' in d:
             del d['pairing']
